@@ -48,8 +48,8 @@ def encode_image(frame, img_type, width, height):
 def process_frame_and_get_angle(frame_raw):
     """Simulasi pemrosesan citra dan perhitungan sudut."""
     hsv = cv2.cvtColor(frame_raw, cv2.COLOR_BGR2HSV)
-    lower_bound = np.array([0, 100, 100])
-    upper_bound = np.array([10, 255, 255])
+    lower_bound = np.array([0, 0, 220])
+    upper_bound = np.array([179, 30, 255])
     frame_processed_mono = cv2.inRange(hsv, lower_bound, upper_bound)
     
     current_time = time.time()
