@@ -6,21 +6,30 @@ import numpy as np
 import socket
 import sys 
 
+# --- KONFIGURASI JARINGAN (UDP CLIENT) ---
+# GANTI IP INI dengan IP dari Station Server Anda!
 SERVER_IP = '127.0.0.1' 
 SERVER_UDP_PORT = 8080 
 IP_CAM_URL = 'http://192.168.100.90:8080/video' 
 FRAME_RATE_LIMIT = 15 # Batasan FPS untuk pengiriman data UDP
 
-
+# Inisialisasi UDP Socket
 UDP_CLIENT_SOCKET = socket.socket(socket.AF_INET, socket.SOCK_DGRAM) 
 
+# --- VARIABEL GLOBAL UTAMA (STATE) ---
 cap = None
 GLOBAL_FRAME_RAW = None 
 GLOBAL_LANE_CENTER_X = None 
 GLOBAL_IS_LANE_VALID = False 
 GLOBAL_OBSTACLE_DISTANCE = 120.0 
+
+# --- VARIABEL GLOBAL UNTUK SPEED DINAMIS ---
 GLOBAL_ACTUAL_SPEED = 0.0 
 ACCELERATION_RATE = 0.05 
+
+# --------------------------------------------------------------------------
+#                          FUNGSI PEMBANTU (HELPERS)
+# --------------------------------------------------------------------------
 
 def encode_image(frame):
     """Mengodekan frame OpenCV ke string Base64."""
@@ -40,15 +49,56 @@ def perspective_transform(img, M, output_size):
     # ... (Fungsi ini tetap sama dengan kode Anda sebelumnya) ...
     return cv2.warpPerspective(img, M, output_size, flags=cv2.INTER_LINEAR)
 
+def preprocess_frame(frame_input):
+    """
+    Menerapkan ROI dan HLS Thresholding untuk menghasilkan BEV Mask.
+    
+    Langkah: ROI -> HLS Thresholding -> Morfologi.
+    """
+    height, width = frame_input.shape[:2]
+    
+    # --- 1. Definisikan Area ROI ---
+    # Mulai dari 1/1.4 tinggi gambar hingga ke bawah.
+    y_start = int(height / 1.4) 
+    
+    # Ambil ROI dari frame mentah
+    roi_image = frame_input[y_start:height, 0:width]
+    
+    # --- 2. Konversi Warna dan Thresholding (Image Segmentation) ---
+    roi_hls = cv2.cvtColor(roi_image, cv2.COLOR_BGR2HLS) 
+    
+    # Batasan warna HLS untuk jalur (sesuai modul C++)
+    lower_hls = np.array([26, 0, 0])
+    upper_hls = np.array([255, 166, 38])
+    roi_thresholded = cv2.inRange(roi_hls, lower_hls, upper_hls) 
 
-# fungsi detekis
+    # --- 3. Proses Morfologi (Membersihkan Noise) ---
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+    
+    # Iterasi Morfologi (Sesuai dengan contoh di modul)
+    roi_thresholded = cv2.erode(roi_thresholded, kernel, iterations=2)
+    roi_thresholded = cv2.dilate(roi_thresholded, kernel, iterations=8)
+    roi_thresholded = cv2.erode(roi_thresholded, kernel, iterations=5)
+    roi_thresholded = cv2.dilate(roi_thresholded, kernel, iterations=8)
+    roi_thresholded = cv2.erode(roi_thresholded, kernel, iterations=7)
+
+    # --- 4. Gabungkan hasil mask dengan ukuran frame penuh ---
+    full_mask = np.zeros((height, width), dtype=np.uint8)
+    full_mask[y_start:height, 0:width] = roi_thresholded
+
+    return full_mask
+
+# --------------------------------------------------------------------------
+#                          FUNGSI KONTROL & DETEKSI
+# --------------------------------------------------------------------------
+
 def detect_lane_lines_BEV_core(warped_mask_input):
     # ... (Salin dan tempel implementasi Centroid Tiga Jalur Anda di sini) ...
     height, width = warped_mask_input.shape[:2]
     lane_center_x = width / 2
     is_lane_valid = False
 
-    # bagi jadi 3 area
+    # Definisikan tiga area
     width_third = width // 3
     left_mask = warped_mask_input[:, 0 : width_third]
     center_mask = warped_mask_input[:, width_third : 2 * width_third]
@@ -87,6 +137,7 @@ def detect_lane_lines_BEV_core(warped_mask_input):
         is_lane_valid = True
 
     data_filtered = warped_mask_input.copy()
+    # ... (Tambahkan kembali Visualisasi Centroid jika perlu untuk debugging lokal) ...
 
     return lane_center_x, is_lane_valid, data_filtered
 
@@ -187,7 +238,10 @@ def process_frame_and_get_angle_visualization(steering_angle):
 
     return frame_processed_color
 
-# pengiriman udp
+# --------------------------------------------------------------------------
+#                          LOGIKA PENGIRIMAN UDP
+# --------------------------------------------------------------------------
+
 def send_data_via_udp(telemetry_data):
     """Mengemas data ke JSON dan mengirimkannya via UDP."""
     # Data harus dibungkus dalam key 'data' agar sesuai dengan Station Server
@@ -207,17 +261,22 @@ def send_data_via_udp(telemetry_data):
     except Exception as e:
         print(f"[ERROR] Kesalahan saat encoding/mengirim: {e}")
 
-# FUNGSI UTAMA
+
+# --------------------------------------------------------------------------
+#                          FUNGSI UTAMA (MAIN LOOP)
+# --------------------------------------------------------------------------
+
+# --------------------------------------------------------------------------
+#                          FUNGSI UTAMA (MAIN LOOP)
+# --------------------------------------------------------------------------
+
 def main_loop():
     global cap, GLOBAL_FRAME_RAW, GLOBAL_LANE_CENTER_X, GLOBAL_IS_LANE_VALID
     print("--- ROBOT PROGRAM (UDP Client) ---")
 
     # 1. INIT KAMERA 
     cap = cv2.VideoCapture(IP_CAM_URL, cv2.CAP_FFMPEG) 
-    
-    if not cap.isOpened():
-        print(f"FATAL ERROR: Gagal terhubung ke IP Camera di {IP_CAM_URL}.")
-        sys.exit(1)
+    # ... (Pengecekan Kamera) ...
 
     print("SUCCESS: IP Camera berhasil dibuka. Memulai proses loop...")
     
@@ -233,10 +292,14 @@ def main_loop():
         
         GLOBAL_FRAME_RAW = frame_raw.copy() 
 
-        # 3. PRA-PROSES CV (Contoh: Konversi ke BEV Masking)
-        frame_gray = cv2.cvtColor(GLOBAL_FRAME_RAW, cv2.COLOR_BGR2GRAY)
-        _, frame_mask = cv2.threshold(frame_gray, 180, 255, cv2.THRESH_BINARY)
+        # 3. PRA-PROSES CV (LOGIKA LANE DETECTION BERDASARKAN MODUL)
+        # # 3.1. Pra-proses ROI, HLS Thresholding, dan Morfologi
+        # # Menghasilkan mask biner dari jalur jalan.
+        frame_mask = preprocess_frame(GLOBAL_FRAME_RAW) 
+        
+        # 3.2. Transformasi Perspektif (Bird Eye View)
         M, Minv = get_perspective_matrix(GLOBAL_FRAME_RAW)
+        # Terapkan Matriks Perspektif pada hasil Masking
         frame_bev_mask = perspective_transform(frame_mask, M, GLOBAL_FRAME_RAW.shape[1::-1])
 
         # 4. KONTROL & LOGIKA
@@ -247,7 +310,7 @@ def main_loop():
         obstacle_data = get_obstacle_telemetry()
         frame_processed = process_frame_and_get_angle_visualization(steering_angle)
         
-        # 5. kemas data
+        # 5. PENGEMASAN DATA (TERMASUK GAMBAR BASE64)# ... (Bagian ini tetap sama) ...
         telemetry_package = {
             "steering_angle": round(steering_angle, 2), 
             "laneStatus": "Detected" if GLOBAL_IS_LANE_VALID else "Lost",
@@ -260,14 +323,14 @@ def main_loop():
             "processed_image_b64": encode_image(frame_processed) if frame_processed is not None else ""
         }
         
+        # 6. KIRIM VIA UDP
         send_data_via_udp(telemetry_package)
         
-        #6. atur fps
+        # 7. PENGATURAN FPS
         elapsed_time = time.time() - start_time
         delay = (1.0 / FRAME_RATE_LIMIT) - elapsed_time
         if delay > 0:
             time.sleep(delay)
-
 if __name__ == "__main__":
     try:
         main_loop()
