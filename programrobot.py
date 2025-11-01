@@ -67,15 +67,15 @@ def preprocess_frame(frame_input):
     # --- 2. Konversi Warna dan Thresholding (Image Segmentation) ---
     roi_hls = cv2.cvtColor(roi_image, cv2.COLOR_BGR2HLS) 
     
-    # Batasan warna HLS untuk jalur (sesuai modul C++)
+    # batasan warna
     lower_hls = np.array([26, 0, 0])
     upper_hls = np.array([255, 166, 38])
     roi_thresholded = cv2.inRange(roi_hls, lower_hls, upper_hls) 
 
-    # --- 3. Proses Morfologi (Membersihkan Noise) ---
+    #bersihkan noise
     kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
     
-    # Iterasi Morfologi (Sesuai dengan contoh di modul)
+    # Iterasi Morfologi 
     roi_thresholded = cv2.erode(roi_thresholded, kernel, iterations=2)
     roi_thresholded = cv2.dilate(roi_thresholded, kernel, iterations=8)
     roi_thresholded = cv2.erode(roi_thresholded, kernel, iterations=5)
